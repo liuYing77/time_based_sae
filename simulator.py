@@ -48,6 +48,12 @@ class SpikeIn(object):
                     times[t].append(i)
         
         return times
+    def reinit(self, spike_times):
+        self._times.clear()
+        self._times = self._parse_description({'spike_times': spike_times})
+
+    def reset(self):
+        return 
 
     def sim(self, t, in_val):
         self._spikes[:] = 0
@@ -149,14 +155,33 @@ class AELayer(object):
             self._t_plus  = description['stdp']['t_plus']
             self._t_minus = description['stdp']['t_minus']
             self._rate    = description['stdp']['learn_rate']
-            self._target_spikes = np.zeros((description['sizes']['rcn'], description['run_time']), 
+            
+            max_time = description['run_time'] + description['stdp']['target_delay'] + \
+                       np.max(description['delays']['hid']) + 1
+            max_time = int(max_time*1.1)
+            self._target_spikes = np.zeros((description['sizes']['rcn'], max_time), 
                                            dtype=spk_t)
             for i in range(description['sizes']['rcn']):
-                if description['stdp']['target_times']:
+                if len(description['stdp']['target_times'][i]):
                     self._target_spikes[i, description['stdp']['target_times'][i]] = 1.
         else:
             self._stdp = None
-            
+    
+    def retarget(self, target_times):
+        self._target_spikes[:] = 0
+        for i in range(self._sizes['rcn']):
+            if target_times[i]:
+                self._target_spikes[i, target_times[i]] = 1.
+
+    def reinput(self, input_times):
+        if isinstance(self._in, SpikeIn):
+            self._in.reinit(input_times)
+        
+    def reset(self):
+        self._in.reset()
+        self._hid.reset()
+        self._rcn.reset()
+
     def store_spikes(self, pop, t, spikes):
         """ Axonal delays. Single delay per output neuron.
             pop: key/index of population
