@@ -173,7 +173,7 @@ class AELayer(object):
     def sim(self, t, in_spikes=None):
         s2v = self._spike_to_val
         rt = self._run_time
-        tref = self._min_tgt_t
+        tref = 0# self._min_tgt_t
 
         self._v_inputs['in'][:] = in_spikes
         self.store_spikes( 'in', t, self._in.sim(t, self._v_inputs['in']) )
