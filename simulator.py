@@ -1,8 +1,4 @@
-import numpy as np
-
-v_t   = np.float32
-spk_t = np.float32
-idx_t = np.int32
+from common import *
 
 class LIF(object):
     def __init__(self, description):
@@ -62,46 +58,15 @@ class SpikeIn(object):
 
         return self._spikes
 
-def default_spike_eval(ref_time, run_time, curr_time, spikes):
-    max_val = 1.
-    return spikes*(max_val/(curr_time - ref_time + 1.))
 
-def default_w_init(n_rows, n_cols, def_dtype=v_t):
-    max_w = 1./np.sqrt(n_rows*n_cols)
-    return np.random.uniform(-max_w, max_w, size=(n_rows, n_cols)).astype(v_t)
-
-def default_stdp(ref_time, run_time, curr_time, spike_to_value,
-                 t_minus, t_plus, weights, min_w, max_w, learn_rate,
-                 last_pre_spikes, pre_spikes, 
-                 post_spikes, target_spikes):
-    w = weights
-    # time weight <==> sooner spikes (t->ref) should be more important    
-    tw = spike_to_value(ref_time, run_time, curr_time, 1.)
-
-#     # weight updates
-#     left_bound = max(t-tau_stdp+1-delay, 0)
-    if (post_spikes>0).any() or (target_spikes>0).any():
-
-        rows = np.where( np.logical_and(last_pre_spikes > (curr_time - t_minus), last_pre_spikes >= 0) )[0]
-        w[rows, :] += learn_rate*np.outer(last_pre_spikes[rows,0], target_spikes[:, 0])*tw
-        w[rows, :] -= learn_rate*np.outer(last_pre_spikes[rows,0], post_spikes[:, 0])*tw
-        
-        cols = np.where( target_spikes > 0 )[0]
-        w[:, cols] += learn_rate*np.outer(np.ones_like(pre_spikes, dtype=spk_t), target_spikes[cols, 0])*tw
-        cols = np.where( post_spikes > 0 )[0]
-        w[:, cols] -= learn_rate*np.outer(np.ones_like(pre_spikes, dtype=spk_t), post_spikes[cols, 0])*tw
-
-        w[w>w_max] = w_max
-        w[w<w_min] = w_min
-
-    return w
 
 class AELayer(object):
+    
     def __init__(self, description):
         """ keys for internal layers are 'in', 'hid', 'rcn': 
             input, hidden and reconstruction populations respectively
         """
-        
+        self.no_spk = -50
         if description['sizes']['in'] != description['sizes']['rcn']:
             raise Exception("In Autoencoder Layer: Input and Reconstruction sizes differ %d != %d"%\
                             (description['sizes']['in'], description['sizes']['rcn']))
@@ -129,10 +94,10 @@ class AELayer(object):
 
         self._spikes = {}
         for k in self._sizes:
-            max_len = max(description['run_time'], self._delays[k].max())
-            self._spikes[k] = np.zeros((self._sizes[k], max_len))
+            max_len = int( 1.5*(description['run_time'] + self._delays[k].max()) )
+            self._spikes[k] = np.zeros((self._sizes[k], max_len), dtype=spk_t)
         
-        self._last_spike_times = {k: -1000.*np.ones((self._sizes[k], 1), dtype=idx_t)\
+        self._last_spike_times = {k: self.no_spk*np.ones((self._sizes[k], 1), dtype=idx_t)\
                                                                  for k in self._sizes}
             
         self._v_inputs = {k: np.zeros((self._sizes[k], 1)) for k in self._sizes}
@@ -155,20 +120,22 @@ class AELayer(object):
             self._t_plus  = description['stdp']['t_plus']
             self._t_minus = description['stdp']['t_minus']
             self._rate    = description['stdp']['learn_rate']
-            
+            self._tgt_delay = description['stdp']['target_delay']
+            self._min_tgt_t = np.min(description['stdp']['target_times'])
             max_time = description['run_time'] + description['stdp']['target_delay'] + \
-                       np.max(description['delays']['hid']) + 1
-            max_time = int(max_time*1.1)
+                       np.max(description['delays']['in']) + np.max(description['delays']['hid']) + 1
+            max_time = int(max_time*1.5)
             self._target_spikes = np.zeros((description['sizes']['rcn'], max_time), 
                                            dtype=spk_t)
             for i in range(description['sizes']['rcn']):
                 if len(description['stdp']['target_times'][i]):
-                    self._target_spikes[i, description['stdp']['target_times'][i]] = 1.
+                    self._target_spikes[i, description['stdp']['target_times'][i]] = 1
         else:
             self._stdp = None
     
     def retarget(self, target_times):
         self._target_spikes[:] = 0
+        self._min_tgt_t = np.min(target_times)
         for i in range(self._sizes['rcn']):
             if target_times[i]:
                 self._target_spikes[i, target_times[i]] = 1.
@@ -181,7 +148,11 @@ class AELayer(object):
         self._in.reset()
         self._hid.reset()
         self._rcn.reset()
-
+        for k in self._sizes:
+            self._spikes[k][:] = 0
+            self._last_spike_times[k][:] = self.no_spk
+            self._v_inputs[k][:] = 0
+            
     def store_spikes(self, pop, t, spikes):
         """ Axonal delays. Single delay per output neuron.
             pop: key/index of population
@@ -196,12 +167,13 @@ class AELayer(object):
         self._spikes[pop][:, idx] = spikes
 
     def recover_spikes(self, pop, t):
+        t = spk_t(t)
         return (self._spikes[pop][range(self._sizes[pop]), t - self._delays[pop]]).reshape(-1, 1)
         
     def sim(self, t, in_spikes=None):
         s2v = self._spike_to_val
         rt = self._run_time
-        tref = 0.
+        tref = self._min_tgt_t
 
         self._v_inputs['in'][:] = in_spikes
         self.store_spikes( 'in', t, self._in.sim(t, self._v_inputs['in']) )
@@ -212,13 +184,15 @@ class AELayer(object):
 
         self._v_inputs['rcn'][:] = np.dot( self._w, self.recover_spikes('hid', t) )
         self.store_spikes( 'rcn', t, self._rcn.sim(t, self._v_inputs['rcn']) )
+        
         for k in self._last_spike_times:
             self._last_spike_times[k][ self.recover_spikes(k, t) > 0 ] = t
 
         if self._stdp is not None:
-            self._w.T[:] = self._stdp(tref, rt, t, s2v, self._t_minus, self._t_plus,
-                                    self._w.T, self._min_w, self._max_w, self._rate,
+            self._w[:] = self._stdp(tref, rt, t, s2v, self._t_minus, self._t_plus,
+                                    self._w, self._min_w, self._max_w, self._rate,
                                     self._last_spike_times['hid'],
+                                    self._last_spike_times['rcn'],
                                     self.recover_spikes('hid', t), #pre/hidden
                                     self.recover_spikes('rcn', t), #post/reconstruction
                                     self._target_spikes[:, t].reshape(-1, 1))     #target for current time
