@@ -11,8 +11,9 @@ def default_spike_eval(ref_time, run_time, curr_time, spikes):
     return spikes*(max_val/dt)
 
 def default_w_init(n_rows, n_cols, def_dtype=v_t):
-    max_w = 1./np.sqrt(n_rows*n_cols)
-    return np.random.uniform(-max_w, max_w, size=(n_rows, n_cols)).astype(v_t)
+#     max_w = 1./np.sqrt(n_rows*n_cols)
+#     return np.random.uniform(-max_w, max_w, size=(n_rows, n_cols)).astype(v_t)
+    return np.random.uniform(0.01, 0.5, size=(n_rows, n_cols)).astype(v_t)
 
 def default_stdp(ref_time, run_time, curr_time, spike_to_value,
                  t_minus, t_plus, weights, min_w, max_w, learn_rate,

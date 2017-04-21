@@ -122,7 +122,7 @@ class AELayer(object):
             self._rate    = description['stdp']['learn_rate']
             self._tgt_delay = description['stdp']['target_delay']
             self._min_tgt_t = np.min(description['stdp']['target_times'])
-            self._delta_w = self._rate*np.logspace(1,0,self._t_plus)
+            self._delta_w = self._rate*np.logspace(0,1,self._t_plus)
             max_time = description['run_time'] + description['stdp']['target_delay'] + \
                        np.max(description['delays']['in']) + np.max(description['delays']['hid']) + 1
             max_time = int(max_time*1.5)
